@@ -1,0 +1,121 @@
+---
+title: "LDA_Morning Consult"
+author: "Robert Schultz"
+date: "10/14/2024"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# Load required libraries
+install.packages("readRDS")
+
+library(readxl)
+library(readRDS)
+library(dplyr)
+library(tidyr)
+library(knitr)
+```
+
+```{r}
+# Read the data
+data <- readRDS("data.Rds")
+lda_coeffs <- read_excel("segmentation (1).xlsx", sheet = "Weights")
+```
+
+```{r}
+# Function to predict class
+predict_class <- function(row, coeffs) {
+  classes <- c("Class1", "Class2", "Class3", "Class4")
+  scores <- sapply(classes, function(class) {
+    sum(row * coeffs[[class]], na.rm = TRUE) + coeffs[[paste0(class, "_Intercept")]]
+  })
+  return(classes[which.max(scores)])
+}
+```
+
+```{r}
+# Apply prediction function to each row
+data$predicted_class <- apply(data, 1, predict_class, coeffs = lda_coeffs)
+
+# Optional: Generate predicted probabilities
+predict_probs <- function(row, coeffs) {
+  classes <- c("Class1", "Class2", "Class3", "Class4")
+  scores <- sapply(classes, function(class) {
+    sum(row * coeffs[[class]], na.rm = TRUE) + coeffs[[paste0(class, "_Intercept")]]
+  })
+  exp_scores <- exp(scores)
+  return(exp_scores / sum(exp_scores))
+}
+
+data$predicted_probs <- apply(data, 1, predict_probs, coeffs = lda_coeffs)
+```
+
+```{r}
+# Overall counts and proportions
+overall_summary <- data %>%
+  group_by(predicted_class) %>%
+  summarise(count = n()) %>%
+  mutate(proportion = count / sum(count))
+```
+
+```{r}
+# Function to generate breakdown by demographic variable
+generate_breakdown <- function(data, var) {
+  data %>%
+    group_by(!!sym(var), predicted_class) %>%
+    summarise(count = n()) %>%
+    group_by(!!sym(var)) %>%
+    mutate(proportion = count / sum(count)) %>%
+    pivot_wider(names_from = predicted_class, 
+                values_from = c(count, proportion), 
+                names_glue = "{predicted_class}_{.value}")
+}
+```
+
+```{r}
+# Generate breakdowns
+age_breakdown <- generate_breakdown(data, "age")
+gender_breakdown <- generate_breakdown(data, "gender")
+race_breakdown <- generate_breakdown(data, "race")
+ethnicity_breakdown <- generate_breakdown(data, "ethnicity")
+```
+
+```{r}
+# Check for small sample sizes in demographic groups
+small_samples <- data %>%
+  group_by(age, gender, race, ethnicity) %>%
+  summarise(count = n()) %>%
+  filter(count < 30)  # Arbitrary threshold, adjust as needed
+
+# Check for extreme proportions
+extreme_proportions <- overall_summary %>%
+  filter(proportion < 0.05 | proportion > 0.95)
+
+# Output results
+cat("Overall Summary:\n")
+print(kable(overall_summary))
+
+cat("\nAge Breakdown:\n")
+print(kable(age_breakdown))
+
+cat("\nGender Breakdown:\n")
+print(kable(gender_breakdown))
+
+cat("\nRace Breakdown:\n")
+print(kable(race_breakdown))
+
+cat("\nEthnicity Breakdown:\n")
+print(kable(ethnicity_breakdown))
+
+cat("\nPotential concerns:\n")
+if (nrow(small_samples) > 0) {
+  cat("- Some demographic groups have small sample sizes (< 30)\n")
+}
+if (nrow(extreme_proportions) > 0) {
+  cat("- Some classes have extreme proportions (< 5% or > 95%)\n")
+}
+cat("- Consider privacy implications of sharing individual-level data\n")
+cat("- Verify that the sample is truly representative of the US adult population\n")
+cat("- Ensure that the LDA model's assumptions are met and its performance is satisfactory\n")
+```
+
